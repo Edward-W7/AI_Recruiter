@@ -1,0 +1,7 @@
+typer[all]
+httpx
+openai
+pdfminer.six
+python‑docx
+python‑dotenv
+rich
