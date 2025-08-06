@@ -89,6 +89,81 @@ def download_contact_attachment(contact: dict):
         f.write(r.content)
     print(f"{contact['Id']} – {contact.get('FullName','<no name>')}: saved {filename}")
 
+
+def get_job_documents(job_id: str, limit: int = PAGE_SIZE) -> list[dict]:
+    """
+    Retrieve all document artifacts attached to the specified job.
+
+    Uses the GET /artifacts endpoint with parent_ids=job_id and is_document=true
+    to return only document files (excludes images) for that job.
+
+    Args:
+        job_id: GUID of the Job record
+        limit: page size (max results per call)
+
+    Returns:
+        A list of artifact objects with at least Id and FileName keys.
+    """
+    artifacts: list[dict] = []
+    offset = 0
+    total_count = None
+
+    while True:
+        resp = client.get(
+            "/artifacts",
+            params={
+                "parent_ids": job_id,
+                "is_document": True,  # only documents
+                "limit": limit,
+                "offset": offset
+            }
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        batch = payload.get("Data", [])
+        meta  = payload.get("Metadata", {})
+        if total_count is None:
+            # depending on Crelate version, use TotalRecords or TotalCount
+            total_count = meta.get("TotalRecords") or meta.get("TotalCount")
+        if not batch:
+            break
+
+        artifacts.extend(batch)
+        offset += len(batch)
+        if len(batch) < limit or (total_count is not None and offset >= total_count):
+            break
+
+    return artifacts
+
+def download_job_documents(job_id: str, output_dir: Path = Path("job_documents")) -> None:
+    """
+    Download all document artifacts attached to a job into a folder.
+
+    Args:
+        job_id: GUID of the Job record.
+        output_dir: directory where files will be saved (default: job_documents)
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    docs = get_job_documents(job_id)
+    if not docs:
+        print(f"No documents found for job {job_id}.")
+        return
+
+    for art in docs:
+        art_id = art.get("Id")
+        filename = art.get("FileName") or art.get("Name") or art_id
+        # fetch file contents
+        resp = client.get(f"/artifacts/{art_id}/content", timeout=60.0)
+        if resp.status_code == 404:
+            print(f"{art_id}: artifact not found")
+            continue
+        resp.raise_for_status()
+        dest = output_dir / filename
+        with open(dest, "wb") as f:
+            f.write(resp.content)
+        print(f"Downloaded {filename}")
+
+
 def main():
     OUTPUT_DIR.mkdir(exist_ok=True)
     contacts = get_job_contacts(JOB_ID)
