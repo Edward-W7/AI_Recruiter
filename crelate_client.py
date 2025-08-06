@@ -1,22 +1,18 @@
 import os
-import sys
 import httpx
 from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime
+from typing import List, Optional
 
 # Load environment variables
 load_dotenv()
-
-API_KEY    = os.getenv("CRELATE_API_KEY")
-JOB_ID     = "9df1bb64-fa09-466e-a5fa-a4703c87dd08"
-BASE_URL   = "https://app.crelate.com/api3"
-OUTPUT_DIR = Path("resumes")
-PAGE_SIZE  = 100
+API_KEY = os.getenv("CRELATE_API_KEY")
+BASE_URL = "https://app.crelate.com/api3"
+PAGE_SIZE = 100
 
 if not API_KEY:
-    print("Error: Set the CRELATE_API_KEY environment variable.", file=sys.stderr)
-    sys.exit(1)
+    raise RuntimeError("CRELATE_API_KEY must be set as an environment variable.")
 
 client = httpx.Client(
     base_url=BASE_URL,
@@ -24,7 +20,11 @@ client = httpx.Client(
     timeout=30.0
 )
 
-def get_job_contacts(job_id: str):
+
+def get_job_contacts(job_id: str) -> List[dict]:
+    """
+    Return all contacts associated with the given job.
+    """
     contacts, offset, total = [], 0, None
     while True:
         resp = client.get(
@@ -32,26 +32,26 @@ def get_job_contacts(job_id: str):
             params={"job_ids": job_id, "limit": PAGE_SIZE, "offset": offset}
         )
         resp.raise_for_status()
-        payload = resp.json()
-        batch   = payload.get("Data", [])
-        meta    = payload.get("Metadata", {})
+        data = resp.json()
+        batch = data.get("Data", [])
+        meta = data.get("Metadata", {})
         if total is None:
             total = meta.get("TotalCount")
         if not batch:
             break
         contacts.extend(batch)
         offset += len(batch)
-        if len(batch) < PAGE_SIZE or (total is not None and offset >= total):
+        if len(batch) < PAGE_SIZE or (total and offset >= total):
             break
     return contacts
 
-def get_latest_stage(contact_id: str) -> str | None:
+
+def get_latest_stage(job_id: str, contact_id: str) -> Optional[str]:
     """
-    Fetch up to 100 stage-change history entries, sort by Date desc in code,
-    and return the most recent Stage Title.
+    Fetch the most recent stage for a contact on a job.
     """
     resp = client.get(
-        f"/jobs/{JOB_ID}/contacts/history",
+        f"/jobs/{job_id}/contacts/history",
         params={"contact_id": contact_id, "limit": 10}
     )
     if resp.status_code == 404:
@@ -60,120 +60,102 @@ def get_latest_stage(contact_id: str) -> str | None:
     history = resp.json().get("Data", [])
     if not history:
         return None
+    # sort by the Date field descending
+    history.sort(
+        key=lambda item: datetime.fromisoformat(item["Date"].rstrip("Z")),
+        reverse=True
+    )
+    return history[0].get("Stage", {}).get("Title")
 
-    # parse and sort
-    def parse_date(item):
-        return datetime.fromisoformat(item["Date"].rstrip("Z"))
-    history.sort(key=parse_date, reverse=True)
-    #print(history)
-    latest = history[0].get("Stage", {})
-    return latest.get("Title")
 
-def download_contact_attachment(contact: dict):
+def download_contact_attachment(contact: dict, output_dir: Path) -> None:
+    """
+    Download a contact's primary resume into output_dir.
+    """
     pa = contact.get("PrimaryDocumentAttachmentId")
     if not pa or not pa.get("Id"):
-        print(f"{contact['Id']} – {contact.get('FullName','<no name>')}: no resume")
         return
-
-    aid      = pa["Id"]
-    filename = pa.get("Title", aid)
-    r        = client.get(f"/artifacts/{aid}/content", timeout=60)
-    if r.status_code == 404:
-        print(f"{contact['Id']}: artifact {aid} not found")
+    aid = pa["Id"]
+    name = pa.get("Title", aid)
+    resp = client.get(f"/artifacts/{aid}/content", timeout=60.0)
+    if resp.status_code != 200:
         return
-    r.raise_for_status()
-
-    dest = OUTPUT_DIR / contact["Id"]
+    dest = output_dir / contact["Id"]
     dest.mkdir(parents=True, exist_ok=True)
-    with open(dest / filename, "wb") as f:
-        f.write(r.content)
-    print(f"{contact['Id']} – {contact.get('FullName','<no name>')}: saved {filename}")
+    with open(dest / name, "wb") as f:
+        f.write(resp.content)
 
 
-def get_job_documents(job_id: str, limit: int = PAGE_SIZE) -> list[dict]:
+def get_job_documents(job_id: str, limit: int = PAGE_SIZE) -> List[dict]:
     """
-    Retrieve all document artifacts attached to the specified job.
-
-    Uses the GET /artifacts endpoint with parent_ids=job_id and is_document=true
-    to return only document files (excludes images) for that job.
-
-    Args:
-        job_id: GUID of the Job record
-        limit: page size (max results per call)
-
-    Returns:
-        A list of artifact objects with at least Id and FileName keys.
+    Return all document artifacts attached to a job.
     """
-    artifacts: list[dict] = []
-    offset = 0
-    total_count = None
-
+    docs, offset, total = [], 0, None
     while True:
         resp = client.get(
             "/artifacts",
             params={
                 "parent_ids": job_id,
-                "is_document": True,  # only documents
+                "is_document": True,
                 "limit": limit,
                 "offset": offset
             }
         )
         resp.raise_for_status()
-        payload = resp.json()
-        batch = payload.get("Data", [])
-        meta  = payload.get("Metadata", {})
-        if total_count is None:
-            # depending on Crelate version, use TotalRecords or TotalCount
-            total_count = meta.get("TotalRecords") or meta.get("TotalCount")
+        data = resp.json()
+        batch = data.get("Data", [])
+        meta = data.get("Metadata", {})
+        if total is None:
+            total = meta.get("TotalRecords") or meta.get("TotalCount")
         if not batch:
             break
-
-        artifacts.extend(batch)
+        docs.extend(batch)
         offset += len(batch)
-        if len(batch) < limit or (total_count is not None and offset >= total_count):
+        if len(batch) < limit or (total and offset >= total):
             break
+    return docs
 
-    return artifacts
 
-def download_job_documents(job_id: str, output_dir: Path = Path("job_documents")) -> None:
+def download_job_documents(job_id: str, output_dir: Path) -> None:
     """
-    Download all document artifacts attached to a job into a folder.
-
-    Args:
-        job_id: GUID of the Job record.
-        output_dir: directory where files will be saved (default: job_documents)
+    Download all document artifacts for a job into output_dir.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
     docs = get_job_documents(job_id)
-    if not docs:
-        print(f"No documents found for job {job_id}.")
-        return
-
+    output_dir.mkdir(parents=True, exist_ok=True)
     for art in docs:
-        art_id = art.get("Id")
-        filename = art.get("FileName") or art.get("Name") or art_id
-        # fetch file contents
-        resp = client.get(f"/artifacts/{art_id}/content", timeout=60.0)
-        if resp.status_code == 404:
-            print(f"{art_id}: artifact not found")
+        aid = art.get("Id")
+        filename = art.get("FileName") or art.get("Name") or aid
+        resp = client.get(f"/artifacts/{aid}/content", timeout=60.0)
+        if resp.status_code != 200:
             continue
-        resp.raise_for_status()
-        dest = output_dir / filename
-        with open(dest, "wb") as f:
+        with open(output_dir / filename, "wb") as f:
             f.write(resp.content)
-        print(f"Downloaded {filename}")
 
 
-def main():
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    contacts = get_job_contacts(JOB_ID)
-    if not contacts:
-        print(f"No contacts found for job {JOB_ID}.")
-        return
+def process_job(
+    job_id: str,
+    stage_name: str,
+    resume_dir: Path,
+    docs_dir: Path
+) -> None:
+    """
+    Download resumes for candidates in the given stage and
+    all job documents into their respective folders.
+    """
+    # resumes
+    resume_dir.mkdir(parents=True, exist_ok=True)
+    for c in get_job_contacts(job_id):
+        if get_latest_stage(job_id, c["Id"]) == stage_name:
+            download_contact_attachment(c, resume_dir)
 
-    for c in contacts:
-        if get_latest_stage(c["Id"]).strip() == "Good Fit":
-            download_contact_attachment(c)
+    # documents
+    download_job_documents(job_id, docs_dir)
 
-if __name__ == "__main__":
-    main()
+# Usage
+# from crelate_client import process_job
+# process_job(
+#     job_id="...",
+#     stage_name="Submitted",
+#     resume_dir=Path("resumes"),
+#     docs_dir=Path("job_docs")
+# )
