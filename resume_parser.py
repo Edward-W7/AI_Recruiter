@@ -1,4 +1,6 @@
 import sys
+import subprocess
+import shutil
 from pathlib import Path
 from typing import Dict, Union
 
@@ -8,27 +10,80 @@ import docx
 
 def extract_text_from_pdf(path: Union[str, Path]) -> str:
     """
-    Extract all text from a PDF file.
+    Extract all text from a PDF file, handling encrypted PDFs gracefully.
     """
     reader = PyPDF2.PdfReader(str(path))
-    text = []
+    if reader.is_encrypted:
+        try:
+            reader.decrypt('')
+        except Exception:
+            return ''
+
+    texts = []
     for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text.append(page_text)
-    return "\n".join(text)
+        try:
+            page_text = page.extract_text() or ''
+        except Exception:
+            page_text = ''
+        texts.append(page_text)
+    return "\n".join(texts)
 
 
-def extract_text_from_docx(path: Union[str, Path]) -> str:
+import win32com.client
+from pathlib import Path
+
+def extract_text_from_docx(path):
+    full_path = Path(path).resolve()
+    if not full_path.exists():
+        raise FileNotFoundError(full_path)
+
+    word = win32com.client.Dispatch("Word.Application")
+    word.Visible = False
+    word.DisplayAlerts = False
+
+    try:
+        doc = word.Documents.Open(
+            FileName=str(full_path),
+            ConfirmConversions=False,
+            ReadOnly=True,
+            AddToRecentFiles=False
+        )
+        text = doc.Content.Text
+        doc.Close(False)
+    finally:
+        word.Quit()
+
+    return text
+
+
+def extract_text_from_doc(path: Union[str, Path]) -> str:
     """
-    Extract all text from a .docx file.
+    Extract all text from a legacy .doc file using Windows COM.
     """
-    doc = docx.Document(str(path))
-    text = []
-    for para in doc.paragraphs:
-        text.append(para.text)
-    return "\n".join(text)
+    from pathlib import Path
+    import win32com.client  # requires pywin32
 
+    full_path = Path(path).resolve()
+    if not full_path.exists():
+        raise FileNotFoundError(f".doc file not found: {full_path}")
+
+    word = win32com.client.Dispatch('Word.Application')
+    word.Visible = False
+    word.DisplayAlerts = False
+
+    try:
+        doc = word.Documents.Open(
+            FileName=str(full_path),
+            ConfirmConversions=False,
+            ReadOnly=True,
+            AddToRecentFiles=False
+        )
+        text = doc.Content.Text
+        doc.Close(False)
+    finally:
+        word.Quit()
+
+    return text
 
 def extract_text_from_txt(path: Union[str, Path]) -> str:
     """
@@ -38,70 +93,53 @@ def extract_text_from_txt(path: Union[str, Path]) -> str:
         return f.read()
 
 
-def extract_resumes_text(
-    folder: Union[str, Path]
-) -> Dict[str, str]:
+def extract_resumes_text(folder: Union[str, Path]) -> Dict[str, str]:
     """
-    Recursively iterate over all files in `folder` (including subdirectories)
-    and extract text from each resume.
-    Supported formats: .pdf, .docx, .txt
+    Recursively iterate over all files in folder and extract text from each resume.
+    Supported formats: .pdf, .docx, .doc, .txt
+    Returns a mapping of relative file paths to extracted content.
+    """
+    base = Path(folder)
+    if not base.exists() or not base.is_dir():
+        raise FileNotFoundError(f"Resumes folder not found: {base}")
 
-    Returns:
-        Dict mapping relative file paths (within `folder`) to their extracted text.
-    """
-    folder = Path(folder)
     texts: Dict[str, str] = {}
-
-    if not folder.exists() or not folder.is_dir():
-        raise FileNotFoundError(f"Resumes folder not found: {folder}")
-
-    # Walk through all nested files
-    for file_path in folder.rglob('*'):
+    for file_path in base.rglob('*'):
         if not file_path.is_file():
             continue
-
         suffix = file_path.suffix.lower()
         try:
             if suffix == '.pdf':
                 content = extract_text_from_pdf(file_path)
             elif suffix == '.docx':
                 content = extract_text_from_docx(file_path)
+            elif suffix == '.doc':
+                content = extract_text_from_doc(file_path)
             elif suffix == '.txt':
                 content = extract_text_from_txt(file_path)
             else:
-                # skip unsupported formats
                 continue
-
-            # store relative path key for clarity
-            rel_path = file_path.relative_to(folder)
-            texts[str(rel_path)] = content
-
         except Exception as e:
-            texts[str(file_path.relative_to(folder))] = f"Error extracting text: {e}"
-
+            content = f"Error extracting text: {e}"
+        rel = file_path.relative_to(base)
+        texts[str(rel)] = content
     return texts
 
 
-def parse_resumes(resume_folder: Path) -> Dict[str, str]:
+def parse_documents(document_folder: Path) -> Dict[str, str]:
     """
     Convenience wrapper: calls extract_resumes_text and returns its result.
-
-    Args:
-        resume_folder: Path to the base folder containing resume subfolders.
-
-    Returns:
-        Dict[str, str]: mapping of relative file paths to extracted text.
     """
-    return extract_resumes_text(resume_folder)
+    return extract_resumes_text(document_folder)
 
 
 if __name__ == '__main__':
     import json
+    import sys
 
-
-    folder = Path("resumes")
+    folder = Path('job_documents')
     try:
-        results = parse_resumes(folder)
+        results = parse_documents(folder)
         print(json.dumps(results, ensure_ascii=False, indent=2))
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)

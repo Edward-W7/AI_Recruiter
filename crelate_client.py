@@ -145,7 +145,7 @@ def process_job(
     # resumes
     resume_dir.mkdir(parents=True, exist_ok=True)
     for c in get_job_contacts(job_id):
-        if get_latest_stage(job_id, c["Id"]) == stage_name:
+        if get_latest_stage(job_id, c["Id"]).strip() == stage_name:
             download_contact_attachment(c, resume_dir)
 
     # documents
