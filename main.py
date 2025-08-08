@@ -9,6 +9,10 @@ from dotenv import load_dotenv
 load_dotenv()
 from crelate_client import process_job
 from AI_agent import find_best_resumes  # your analyzer
+import win32com
+import pythoncom
+from win32com.client import Dispatch
+
 
 # ─── Logging Setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -18,8 +22,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── Sample job and stage from specification ────────────────────────────────────
-default_job_id = input("Please enter job code (last part in job URL)") or "29b80d57-280c-414f-b9ea-d4dd080472d1"
-default_stage_name = input("Please enter stage name (e.g. \"Good Fit\")")or os.getenv("DEFAULT_STAGE")
+print("Build Version 1.1")
+default_job_id = input("Please enter job code (last part in job URL)\n")
+if not default_job_id:
+    default_job_id = input("Please enter job code (last part in job URL)\n")
+
+default_stage_name = input(f"Please enter stage name (e.g. \"Good Fit\") Leave blank for default ({os.getenv("DEFAULT_STAGE")})\n") or os.getenv("DEFAULT_STAGE")
 
 # ─── Directories for output ─────────────────────────────────────────────────────
 resume_output_dir   = Path("resumes")

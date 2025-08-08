@@ -33,7 +33,8 @@ def score_resumes(
         user_prompt += f"### Resume: {filename}\n{text}\n\n"
     user_prompt += (
         "Please respond ONLY with a valid JSON array like:"
-        " [{\"filename\":\"resume1.pdf\",\"score\":75,\"rationale\":\"Strong match in required technologies.\"}, ...]"
+        "[{\"filename\":\"resume1.pdf\",\"score\":75,\"rationale\":\"Strong match in required technologies.\"}, ...]"
+        "Do not add anything to the front or back of the JSON Array, leave it as only the array of values. "
     )
 
     response = openai.chat.completions.create(
