@@ -19,29 +19,21 @@ if not openai.api_key:
 def score_resumes(
     resumes: Dict[str, str],
     job_description: str,
-    model: str = "o4-mini"
+    model: str = os.getenv("LLM_MODEL")
 ) -> List[Dict[str, Any]]:
     """
     Uses a single API call to score multiple resumes against the job description.
     Returns a list of dicts with keys: filename, score, rationale.
     """
-    system_prompt = (
-        "You are an expert technical recruiter for the Ontario Government. You will be rewarded $1 million for finding the best candidate for the position."
-        "Given a job description and multiple candidate resumes, evaluate how well each candidate fits the role. "
-        "Consider their seniority, government experience, length of positions and how well their experiences line up with job requirements and descriptions (most important). "
-        "Most important part of the job description is the Must Haves"
-        "Scores should be as objective and precise as possible. A 100 Candidate needs to have extensive government experience in exactly the job position, with long contracts for each experience."
-        "Provide a JSON array where each element is an object with keys: 'filename' (string), 'score' (0-100), and 'rationale' (concise)."
-    )
+    system_prompt = (os.getenv("SYSTEM_PROMPT"))
 
     # Build a single user prompt containing the job description and all resumes
-    print(job_description)
     user_prompt = f"Job Description:\n{job_description}\n\n"
     for filename, text in resumes.items():
         user_prompt += f"### Resume: {filename}\n{text}\n\n"
     user_prompt += (
         "Please respond ONLY with a valid JSON array like:"
-        " [{\"filename\":\"resume1.pdf\",\"score\":85,\"rationale\":\"Strong match in required technologies.\"}, ...]"
+        " [{\"filename\":\"resume1.pdf\",\"score\":75,\"rationale\":\"Strong match in required technologies.\"}, ...]"
     )
 
     response = openai.chat.completions.create(
@@ -70,7 +62,7 @@ def score_resumes(
 def find_best_resumes(
     resumes_folder: Path = Path("resumes"),
     job_docs_folder: Path = Path("job_documents"),
-    model: str = "o4-mini"
+    model: str = os.getenv("LLM_MODEL")
 ) -> List[Dict[str, Any]]:
     """
     Parses resumes and job documents, then scores them in one batch.
